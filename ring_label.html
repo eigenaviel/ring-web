@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>戒指手势标注</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #fff; --text: #16191d; --muted: #6b7280; --line: #e3e6ea;
+  --accent: #2563eb; --right: #2563eb; --left: #dc2626; --ok: #16a34a; --warn: #d97706;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111418; --card: #1b1f25; --text: #e9ecef; --muted: #9aa3ad; --line: #2c323a;
+          --accent: #60a5fa; --right: #3b82f6; --left: #ef4444; --ok: #22c55e; --warn: #f59e0b; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 16px/1.45 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+       padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+h1 { font-size: 20px; margin: 4px 0 12px; }
+h2 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 14px 0 8px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+button { font: inherit; border: 0; border-radius: 12px; padding: 12px 16px; background: var(--accent); color: #fff;
+         cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+button:disabled { opacity: .35; }
+.big { flex: 1 1 0; min-height: 88px; font-size: 20px; font-weight: 600; }
+.big small { display: block; font-size: 12px; font-weight: 400; opacity: .85; }
+.right { background: var(--right); } .left { background: var(--left); }
+.outline { background: transparent; border: 2px solid currentColor; }
+.outline.right { color: var(--right); } .outline.left { color: var(--left); }
+.active { outline: 4px solid var(--warn); outline-offset: 2px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; font-size: 13px; color: var(--muted); }
+.stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); font-size: 13px; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+.dot.on { background: var(--ok); } .dot.rec { background: var(--left); animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+input { font: inherit; width: 100%; padding: 10px; border-radius: 10px; border: 1px solid var(--line);
+        background: var(--bg); color: var(--text); }
+label { font-size: 13px; color: var(--muted); display: block; margin: 8px 0 4px; }
+.sess { border-top: 1px solid var(--line); padding: 10px 0; font-size: 14px; }
+.sess:first-child { border-top: 0; }
+.log { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); max-height: 100px; overflow: auto; white-space: pre-wrap; }
+
+/* 采集面板（连上戒指后弹出） */
+#panel { position: fixed; inset: 0; background: var(--bg); overflow: auto; display: none;
+         padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+#panel.show { display: block; }
+#mode { border-radius: 14px; padding: 16px; text-align: center; margin: 10px 0; border: 1px solid var(--line);
+        background: var(--card); transition: background .15s; }
+#mode .title { font-size: 22px; font-weight: 700; }
+#mode .sub { font-size: 14px; color: var(--muted); min-height: 20px; font-variant-numeric: tabular-nums; }
+#mode.right { background: color-mix(in srgb, var(--right) 18%, var(--card)); }
+#mode.left { background: color-mix(in srgb, var(--left) 18%, var(--card)); }
+#mode.flash { box-shadow: 0 0 0 4px var(--ok); }
+.tally { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 10px; font-size: 13px; color: var(--muted); }
+.tally b { color: var(--text); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<h1>戒指手势标注</h1>
+
+<div class="card">
+  <label for="inName">名称（会出现在导出的文件名里）</label>
+  <input id="inName" value="label">
+  <label for="inNote">备注（佩戴方式、姿势、场景等）</label>
+  <input id="inNote" placeholder="例如：新戒指，站立，手自然下垂">
+  <div class="row" style="margin-top:12px">
+    <button id="btnConnect" style="flex:1">连接戒指并开始采集</button>
+  </div>
+  <div class="muted" style="margin-top:8px">连上后自动开始记录并弹出采集面板。记录时请保持本页面在前台。</div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <b>已保存的记录</b>
+    <span class="muted" id="sQuota"></span>
+  </div>
+  <div id="sessions" class="muted">暂无</div>
+</div>
+
+<div class="card"><div class="log" id="log"></div></div>
+
+<!-- 采集面板 -->
+<div id="panel">
+  <div class="row" style="justify-content:space-between">
+    <div><span id="connDot" class="dot"></span><span id="connText">未连接</span></div>
+    <button id="btnFinish">结束并保存</button>
+  </div>
+  <div class="stats" style="margin-top:8px">
+    <div>采样率 <b id="sRate">–</b></div>
+    <div>电池 <b id="sBat">–</b></div>
+    <div>时长 <b id="sDur">–</b></div>
+    <div>数据量 <b id="sBytes">–</b></div>
+    <div>丢失 <b id="sLost">–</b></div>
+    <div>重连 <b id="sReconn">–</b></div>
+  </div>
+
+  <div id="mode"><div class="title" id="modeTitle">空闲</div><div class="sub" id="modeSub">选择下面的单次或连续模式</div></div>
+
+  <h2>单次（按下后“嘀”一声，3 秒内滑一次）</h2>
+  <div class="row">
+    <button class="big right" id="btnOneRight">右滑一次<small>拇指往右</small></button>
+    <button class="big left" id="btnOneLeft">左滑一次<small>拇指往左</small></button>
+  </div>
+
+  <h2>连续（按下后一直滑同一个方向，按“结束”停止）</h2>
+  <div class="row">
+    <button class="big outline right" id="btnContRight">一直右滑</button>
+    <button class="big outline left" id="btnContLeft">一直左滑</button>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button id="btnContEnd" style="flex:1" disabled>结束连续</button>
+  </div>
+
+  <div class="row" style="margin-top:14px">
+    <button class="secondary" id="btnFalse">刚才误触发了</button>
+    <button class="secondary" id="btnUndo">撤销上一个</button>
+  </div>
+
+  <h2>本次统计</h2>
+  <div class="tally">
+    <div>单次右滑 <b id="cOneR">0</b></div>
+    <div>单次左滑 <b id="cOneL">0</b></div>
+    <div>连续右滑 <b id="cContR">0 段</b></div>
+    <div>连续左滑 <b id="cContL">0 段</b></div>
+    <div>自动检测到滑动 <b id="cDet">0</b></div>
+    <div>误触发 <b id="cFalse">0</b></div>
+  </div>
+  <div class="muted" style="margin-top:8px">“自动检测”用高频振动粗略判断有没有滑动（阈值 <span id="thrText"></span> g），只用于提示，保存的是全部原始数据。</div>
+</div>
+
+<script>
+"use strict";
+// 与 firmware/imu_stream 保持一致
+const UUID_SVC  = "526a1001-b5a3-f393-e0a9-e50e24dcca9e";
+const UUID_DATA = "526a1002-b5a3-f393-e0a9-e50e24dcca9e";
+const UUID_CMD  = "526a1003-b5a3-f393-e0a9-e50e24dcca9e";
+const CFG = { odr: 833, afs: 4, gfs: 500 };
+const ONE_WINDOW_S = 3.0;     // 单次：按下后多长时间内算这一次
+const FLUSH_MS = 2000;
+const DET_THR_G = 0.06;       // 高频加速度包络阈值（analysis/detect_eval.py：新戒指走路时命中 98%、无误触发）
+const DET_REFRACT_S = 0.5;    // 两次检测的最短间隔
+
+const $ = id => document.getElementById(id);
+const logEl = $("log");
+function log(msg) {
+  logEl.textContent = `${new Date().toLocaleTimeString()} ${msg}\n` + logEl.textContent.slice(0, 4000);
+}
+$("thrText").textContent = DET_THR_G;
+
+// ---------- IndexedDB（与 ring_logger.html 共用，两个页面的记录都能在这里看到） ----------
+let db;
+function openDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("ringlog", 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      d.createObjectStore("sessions", { keyPath: "id" });
+      d.createObjectStore("chunks", { keyPath: ["sid", "seq"] });
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+function tx(store, mode, fn) {
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, mode);
+    const out = fn(t.objectStore(store));
+    t.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
+    t.onerror = () => rej(t.error);
+  });
+}
+const putSession = s => tx("sessions", "readwrite", st => st.put(s));
+const allSessions = () => tx("sessions", "readonly", st => st.getAll());
+const chunksOf = sid => tx("chunks", "readonly", st => st.getAll(IDBKeyRange.bound([sid, 0], [sid, Infinity])));
+function deleteSession(sid) {
+  return Promise.all([
+    tx("sessions", "readwrite", st => st.delete(sid)),
+    tx("chunks", "readwrite", st => st.delete(IDBKeyRange.bound([sid, 0], [sid, Infinity]))),
+  ]);
+}
+
+// ---------- 状态 ----------
+let device = null, dataChr = null, cmdChr = null;
+let connected = false;
+let session = null;
+let pending = [], pendingBytes = 0, chunkSeq = 0;
+let nextIdx = null, lastDevT = null, tWrap = 0, lastRawT = null;
+let rateCount = 0, rateT0 = performance.now();
+let wakeLock = null, flushTimer = null, infoTimer = null, lastInfo = "";
+let one = null;     // 单次窗口 {label, t0, timer, detected}
+let cont = null;    // 连续模式 {label, marker, detected}
+
+// ---------- 实时滑动检测：4 阶 Butterworth 高通 20 Hz（两级二阶节）+ 30 ms 包络 ----------
+function biquadHP(fc, fs, q) {
+  const w = 2 * Math.PI * fc / fs, c = Math.cos(w), al = Math.sin(w) / (2 * q), a0 = 1 + al;
+  return { b0: (1 + c) / 2 / a0, b1: -(1 + c) / a0, b2: (1 + c) / 2 / a0, a1: -2 * c / a0, a2: (1 - al) / a0 };
+}
+const HP = [biquadHP(20, CFG.odr, 0.5412), biquadHP(20, CFG.odr, 1.3066)];
+const A_SCALE = CFG.afs * 0.061 / 2 / 1000;
+const ENV_N = Math.round(0.03 * CFG.odr);
+let hpState = [0, 1, 2].map(() => HP.map(() => [0, 0, 0, 0]));  // 每轴每级 x1 x2 y1 y2
+const WARMUP_N = Math.round(0.5 * CFG.odr);   // 刚开始推流时滤波器有启动瞬态，先不检测
+let envBuf = new Float32Array(ENV_N), envSum = 0, envPos = 0, lastDetT = -1e9, warmup = WARMUP_N;
+
+function hpStep(axis, x) {
+  for (let s = 0; s < HP.length; s++) {
+    const f = HP[s], z = hpState[axis][s];
+    const y = f.b0 * x + f.b1 * z[0] + f.b2 * z[1] - f.a1 * z[2] - f.a2 * z[3];
+    z[1] = z[0]; z[0] = x; z[3] = z[2]; z[2] = y; x = y;
+  }
+  return x;
+}
+function detectSample(t, ax, ay, az) {
+  const hx = hpStep(0, ax * A_SCALE), hy = hpStep(1, ay * A_SCALE), hz = hpStep(2, az * A_SCALE);
+  const e = Math.hypot(hx, hy, hz);
+  envSum += e - envBuf[envPos]; envBuf[envPos] = e; envPos = (envPos + 1) % ENV_N;
+  if (warmup > 0) { warmup--; return; }
+  if (envSum / ENV_N > DET_THR_G && t - lastDetT > DET_REFRACT_S) { lastDetT = t; onDetect(t); }
+}
+function resetDetector() {
+  hpState = [0, 1, 2].map(() => HP.map(() => [0, 0, 0, 0]));
+  envBuf.fill(0); envSum = 0; lastDetT = -1e9; warmup = WARMUP_N;
+}
+
+function onDetect(t) {
+  if (!session) return;
+  session.detections.push(Number(t.toFixed(4)));
+  $("cDet").textContent = session.detections.length;
+  if (one && t >= one.t0) { one.detected++; renderMode(); }
+  if (cont) { cont.detected++; renderMode(); }
+  const m = $("mode"); m.classList.add("flash"); setTimeout(() => m.classList.remove("flash"), 150);
+}
+
+// ---------- 蓝牙 ----------
+async function connect() {
+  if (!navigator.bluetooth) { alert("这个浏览器不支持网页蓝牙。安卓请用 Chrome。"); return; }
+  try {
+    device = await navigator.bluetooth.requestDevice({ filters: [{ name: "RingIMU" }], optionalServices: [UUID_SVC] });
+  } catch (e) { log("未选择设备：" + e.message); return; }
+  device.addEventListener("gattserverdisconnected", onDisconnected);
+  try { await gattConnect(); } catch (e) { log("连接失败：" + e.message); alert("连接失败：" + e.message); }
+}
+
+async function gattConnect() {
+  $("connText").textContent = "连接中…";
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(UUID_SVC);
+  dataChr = await svc.getCharacteristic(UUID_DATA);
+  cmdChr = await svc.getCharacteristic(UUID_CMD);
+  cmdChr.addEventListener("characteristicvaluechanged", e => {
+    const s = new TextDecoder().decode(e.target.value).trim();
+    if (s.startsWith("# imu_stream")) {
+      lastInfo = s;
+      const m = s.match(/bat_v=([\d.]+)/);
+      if (m) $("sBat").textContent = m[1] + " V";
+    }
+  });
+  await cmdChr.startNotifications();
+  dataChr.addEventListener("characteristicvaluechanged", onData);
+  await dataChr.startNotifications();
+  for (const c of ["stop", `odr ${CFG.odr}`, `afs ${CFG.afs}`, `gfs ${CFG.gfs}`, "info"]) {
+    await sendCmd(c);
+    await sleep(80);
+  }
+  await sleep(300);
+  if (!lastInfo.includes("who_am_i=0x6A")) log("警告：IMU 未识别 " + lastInfo);
+  connected = true;
+  $("connDot").className = "dot rec";
+  $("connText").textContent = "记录中 " + (device.name || "");
+  log("已连接：" + lastInfo);
+  nextIdx = null; resetDetector();
+  await sendCmd("start");   // 固件收到 start 才唤醒 IMU（约 0.1 s 后出数据）
+  if (session) { session.reconnects++; addMarker("reconnect", lastDevT, lastDevT); }
+  else await startRec();
+  clearInterval(infoTimer);
+  infoTimer = setInterval(() => connected && sendCmd("info").catch(() => {}), 30000);
+}
+
+async function onDisconnected() {
+  connected = false;
+  $("connDot").className = "dot";
+  $("connText").textContent = "已断开，正在重连…";
+  log("蓝牙断开");
+  for (let i = 0; i < 1000 && !connected && device && session; i++) {
+    await sleep(2000);
+    try { await gattConnect(); return; } catch (e) { /* 继续重试 */ }
+  }
+}
+
+const sendCmd = s => cmdChr.writeValueWithResponse(new TextEncoder().encode(s));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 数据包：idx:u32 t0:u32 n:u8 | n×(dt:u16, ax ay az gx gy gz: i16)
+function onData(e) {
+  const v = e.target.value;
+  const idx = v.getUint32(0, true);
+  let t = v.getUint32(4, true);
+  const n = v.getUint8(8);
+  if (nextIdx !== null && idx > nextIdx && session) session.lost += idx - nextIdx;
+  nextIdx = idx + n;
+  for (let k = 0; k < n; k++) {
+    const o = 9 + k * 14;
+    t = (t + v.getUint16(o, true)) >>> 0;
+    if (lastRawT !== null && lastRawT - t > 2 ** 31) tWrap += 2 ** 32;
+    lastRawT = t;
+    detectSample((t + tWrap) / 1e6, v.getInt16(o + 2, true), v.getInt16(o + 4, true), v.getInt16(o + 6, true));
+  }
+  lastDevT = (t + tWrap) / 1e6;
+  rateCount += n;
+  if (session) {
+    // 原样保存数据包（前面加 2 字节长度），导入时在电脑上解析
+    const buf = new Uint8Array(2 + v.byteLength);
+    buf[0] = v.byteLength & 0xff; buf[1] = v.byteLength >> 8;
+    buf.set(new Uint8Array(v.buffer, v.byteOffset, v.byteLength), 2);
+    pending.push(buf);
+    pendingBytes += buf.length;
+  }
+}
+
+// ---------- 记录 ----------
+async function startRec() {
+  const now = new Date();
+  session = {
+    id: now.getTime(),
+    name: ($("inName").value || "label").replace(/[^\w一-龥-]/g, "_"),
+    note: $("inNote").value,
+    page: "ring_label",
+    startedAt: now.toISOString(),
+    cfg: CFG, info: lastInfo, markers: [], detections: [], bytes: 0, chunks: 0, lost: 0, reconnects: 0,
+    userAgent: navigator.userAgent,
+  };
+  chunkSeq = 0; pending = []; pendingBytes = 0; one = null; cont = null;
+  await putSession(session);
+  flushTimer = setInterval(flush, FLUSH_MS);
+  await requestWakeLock();
+  renderTally(); renderMode();
+  $("panel").classList.add("show");
+  log("开始记录 " + session.name);
+}
+
+async function stopRec() {
+  if (!session) return;
+  if (one) endOne(false);
+  if (cont) endCont();
+  clearInterval(flushTimer);
+  await flush();
+  session.endedAt = new Date().toISOString();
+  session.info_end = lastInfo;
+  await putSession(session);
+  const sid = session.id;
+  log(`已保存：${fmtBytes(session.bytes)}，${countMarkers()} 个标签`);
+  session = null;
+  releaseWakeLock();
+  clearInterval(infoTimer);
+  if (device) {
+    const d = device; device = null;   // 不再自动重连
+    try { if (connected) await sendCmd("stop"); } catch (e) {}
+    try { d.gatt.disconnect(); } catch (e) {}
+  }
+  connected = false;
+  $("panel").classList.remove("show");
+  await renderSessions();
+  await exportSession(sid);
+}
+
+async function flush() {
+  if (!session || !pending.length) return;
+  const parts = pending; pending = [];
+  const out = new Uint8Array(pendingBytes); pendingBytes = 0;
+  let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
+  const s = session;
+  await tx("chunks", "readwrite", st => st.put({ sid: s.id, seq: chunkSeq++, data: out.buffer }));
+  s.bytes += out.length; s.chunks = chunkSeq;
+  await putSession(s);
+}
+
+function addMarker(label, t0, t1) {
+  if (!session || t0 === null) return null;
+  const m = { label, t_start: t0, t_end: t1, phone_time: new Date().toISOString() };
+  session.markers.push(m);
+  putSession(session);
+  renderTally();
+  return m;
+}
+const countMarkers = () => session.markers.filter(m => m.label !== "reconnect").length;
+
+// ---------- 单次 / 连续 ----------
+// 标签：单次 thumb_right / thumb_left（按下后 3 秒的区间）；
+//       连续 thumb_right_cont / thumb_left_cont（从按下到“结束”的区间，区间内都是同一方向）
+const NAME = { thumb_right: "右滑", thumb_left: "左滑" };
+
+function startOne(label) {
+  if (lastDevT === null || cont) return;
+  if (one) endOne(false);
+  const m = addMarker(label, lastDevT, lastDevT + ONE_WINDOW_S);
+  one = { label, t0: lastDevT, marker: m, detected: 0, left: ONE_WINDOW_S };
+  beep();
+  one.timer = setInterval(() => { one.left -= 0.1; if (one.left <= 0) endOne(true); else renderMode(); }, 100);
+  renderMode();
+}
+function endOne(sound) {
+  clearInterval(one.timer);
+  one = null;
+  if (sound) beep(600, 80);
+  renderMode();
+}
+
+function startCont(label) {
+  if (lastDevT === null) return;
+  if (one) endOne(false);
+  if (cont) { if (cont.label === label) return; endCont(); }
+  cont = { label, marker: addMarker(label + "_cont", lastDevT, null), detected: 0, t0: lastDevT };
+  beep(1000, 200);
+  renderMode();
+}
+function endCont() {
+  if (!cont) return;
+  cont.marker.t_end = lastDevT;
+  log(`连续${NAME[cont.label]}结束：${(lastDevT - cont.t0).toFixed(1)} 秒，检测到 ${cont.detected} 次`);
+  cont = null;
+  putSession(session);
+  beep(600, 120);
+  renderMode(); renderTally();
+}
+
+function undo() {
+  if (!session) return;
+  for (let i = session.markers.length - 1; i >= 0; i--) {
+    const m = session.markers[i];
+    if (m.label === "reconnect") continue;
+    session.markers.splice(i, 1);
+    if (one && one.marker === m) endOne(false);
+    if (cont && cont.marker === m) { cont = null; renderMode(); }
+    log("已撤销 " + m.label);
+    putSession(session);
+    renderTally();
+    break;
+  }
+}
+
+function renderMode() {
+  const box = $("mode");
+  box.className = "";
+  if (cont) {
+    box.classList.add(cont.label === "thumb_right" ? "right" : "left");
+    $("modeTitle").textContent = `连续${NAME[cont.label]}中`;
+    $("modeSub").textContent = `已 ${(lastDevT - cont.t0).toFixed(0)} 秒 · 检测到 ${cont.detected} 次`;
+  } else if (one) {
+    box.classList.add(one.label === "thumb_right" ? "right" : "left");
+    $("modeTitle").textContent = `现在${NAME[one.label]}一次`;
+    $("modeSub").textContent = `${Math.max(0, one.left).toFixed(1)} 秒` + (one.detected ? " · ✓ 检测到滑动" : "");
+  } else {
+    $("modeTitle").textContent = "空闲";
+    $("modeSub").textContent = "选择下面的单次或连续模式";
+  }
+  const busy = !!cont;
+  $("btnOneRight").disabled = busy; $("btnOneLeft").disabled = busy;
+  $("btnContEnd").disabled = !busy;
+  $("btnContRight").classList.toggle("active", busy && cont.label === "thumb_right");
+  $("btnContLeft").classList.toggle("active", busy && cont.label === "thumb_left");
+  $("btnOneRight").classList.toggle("active", !!one && one.label === "thumb_right");
+  $("btnOneLeft").classList.toggle("active", !!one && one.label === "thumb_left");
+}
+
+function renderTally() {
+  if (!session) return;
+  const c = l => session.markers.filter(m => m.label === l).length;
+  $("cOneR").textContent = c("thumb_right");
+  $("cOneL").textContent = c("thumb_left");
+  $("cContR").textContent = c("thumb_right_cont") + " 段";
+  $("cContL").textContent = c("thumb_left_cont") + " 段";
+  $("cFalse").textContent = c("false_trigger");
+  $("cDet").textContent = session.detections.length;
+}
+
+let audioCtx;
+function beep(freq = 1200, ms = 120) {
+  try {
+    audioCtx = audioCtx || new AudioContext();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = freq; g.gain.value = 0.15;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + ms / 1000);
+  } catch (e) {}
+  if (navigator.vibrate) navigator.vibrate(ms);
+}
+
+// ---------- 屏幕常亮 ----------
+async function requestWakeLock() {
+  try { wakeLock = await navigator.wakeLock.request("screen"); }
+  catch (e) { log("无法开启屏幕常亮：" + e.message); }
+}
+function releaseWakeLock() { if (wakeLock) { wakeLock.release(); wakeLock = null; } }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && session) requestWakeLock();
+  if (document.visibilityState === "hidden" && session) log("页面进入后台：数据可能中断");
+});
+window.addEventListener("beforeunload", e => { if (session) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---------- 导出（格式同 ring_logger.html，用 tools/import_phone.py 转换） ----------
+// 文件格式：b"RINGLOG1" | u32 头长度 | 头 JSON(UTF-8) | 若干 [u16 包长度 | 包]
+async function exportSession(sid) {
+  const s = (await allSessions()).find(x => x.id === sid);
+  const chunks = await chunksOf(sid);
+  const head = new TextEncoder().encode(JSON.stringify(s));
+  const pre = new Uint8Array(12);
+  pre.set(new TextEncoder().encode("RINGLOG1"), 0);
+  new DataView(pre.buffer).setUint32(8, head.length, true);
+  const blob = new Blob([pre, head, ...chunks.sort((a, b) => a.seq - b.seq).map(c => c.data)],
+                        { type: "application/octet-stream" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  const d = new Date(s.startedAt), p = x => String(x).padStart(2, "0");   // 文件名用手机本地时间
+  a.download = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${s.name}.ringlog`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  log("已导出 " + a.download);
+}
+
+async function renderSessions() {
+  const list = (await allSessions()).sort((a, b) => b.id - a.id);
+  const el = $("sessions");
+  if (!list.length) { el.textContent = "暂无"; return; }
+  el.innerHTML = "";
+  for (const s of list) {
+    const div = document.createElement("div");
+    div.className = "sess";
+    const live = session && session.id === s.id;
+    const dur = s.endedAt ? ((new Date(s.endedAt) - new Date(s.startedAt)) / 60000).toFixed(1) + " 分钟" : "未结束";
+    const n = s.markers.filter(m => m.label !== "reconnect").length;
+    div.appendChild(Object.assign(document.createElement("div"), {
+      textContent: `${s.name} · ${new Date(s.startedAt).toLocaleString()} · ${dur} · ${fmtBytes(s.bytes)} · ${n} 个标签` }));
+    const row = document.createElement("div");
+    row.className = "row"; row.style.marginTop = "6px";
+    const bE = Object.assign(document.createElement("button"), { className: "secondary", textContent: "导出", disabled: live });
+    bE.onclick = () => exportSession(s.id);
+    const bD = Object.assign(document.createElement("button"), { className: "secondary", textContent: "删除", disabled: live });
+    bD.onclick = async () => { if (confirm("确定删除这条记录？导出前删除就找不回来了。")) { await deleteSession(s.id); renderSessions(); } };
+    row.append(bE, bD); div.appendChild(row);
+    el.appendChild(div);
+  }
+}
+
+function fmtBytes(b) { return b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : (b / 1e3).toFixed(0) + " KB"; }
+
+// ---------- 界面刷新 ----------
+setInterval(async () => {
+  const now = performance.now();
+  const rate = rateCount / ((now - rateT0) / 1000); rateCount = 0; rateT0 = now;
+  $("sRate").textContent = connected ? rate.toFixed(0) + " Hz" : "–";
+  if (session) {
+    $("sDur").textContent = ((Date.now() - session.id) / 60000).toFixed(1) + " 分";
+    $("sBytes").textContent = fmtBytes(session.bytes + pendingBytes);
+    $("sLost").textContent = session.lost;
+    $("sReconn").textContent = session.reconnects;
+    if (cont) renderMode();
+  }
+  if (navigator.storage && navigator.storage.estimate) {
+    const e = await navigator.storage.estimate();
+    $("sQuota").textContent = `已用 ${fmtBytes(e.usage)} / 可用 ${fmtBytes(e.quota)}`;
+  }
+}, 1000);
+
+$("btnConnect").onclick = connect;
+$("btnFinish").onclick = () => { if (!cont || confirm("连续模式还没结束，确定结束并保存？")) stopRec(); };
+$("btnOneRight").onclick = () => startOne("thumb_right");
+$("btnOneLeft").onclick = () => startOne("thumb_left");
+$("btnContRight").onclick = () => startCont("thumb_right");
+$("btnContLeft").onclick = () => startCont("thumb_left");
+$("btnContEnd").onclick = endCont;
+$("btnFalse").onclick = () => { addMarker("false_trigger", lastDevT, lastDevT); beep(400, 60); };
+$("btnUndo").onclick = undo;
+
+openDb().then(d => { db = d; renderSessions(); if (navigator.storage?.persist) navigator.storage.persist(); })
+        .catch(e => log("数据库打开失败：" + e));
+if (!navigator.bluetooth) log("此浏览器不支持网页蓝牙（安卓用 Chrome）");
+</script>
+</body>
+</html>

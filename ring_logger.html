@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>戒指记录器</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #fff; --text: #16191d; --muted: #6b7280; --line: #e3e6ea;
+  --accent: #2563eb; --right: #2563eb; --left: #dc2626; --ok: #16a34a; --warn: #d97706;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111418; --card: #1b1f25; --text: #e9ecef; --muted: #9aa3ad; --line: #2c323a;
+          --accent: #60a5fa; --right: #3b82f6; --left: #ef4444; --ok: #22c55e; --warn: #f59e0b; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 16px/1.45 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+       padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+h1 { font-size: 20px; margin: 4px 0 12px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+button { font: inherit; border: 0; border-radius: 12px; padding: 12px 16px; background: var(--accent); color: #fff;
+         cursor: pointer; touch-action: manipulation; }
+button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+button:disabled { opacity: .4; }
+.big { flex: 1 1 0; min-height: 96px; font-size: 22px; font-weight: 600; }
+.big.right { background: var(--right); } .big.left { background: var(--left); }
+.big.active { outline: 4px solid var(--warn); outline-offset: -4px; }
+.stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 12px; font-size: 14px; }
+.stats b { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); font-size: 13px; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+.dot.on { background: var(--ok); } .dot.rec { background: var(--left); animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+input { font: inherit; width: 100%; padding: 10px; border-radius: 10px; border: 1px solid var(--line);
+        background: var(--bg); color: var(--text); }
+label { font-size: 13px; color: var(--muted); display: block; margin: 8px 0 4px; }
+.sess { border-top: 1px solid var(--line); padding: 10px 0; }
+.sess:first-child { border-top: 0; }
+.log { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); max-height: 120px; overflow: auto; white-space: pre-wrap; }
+#countdown { font-size: 15px; font-weight: 600; color: var(--warn); min-height: 22px; }
+</style>
+</head>
+<body>
+<h1>戒指记录器</h1>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <div><span id="connDot" class="dot"></span><span id="connText">未连接</span></div>
+    <button id="btnConnect">连接戒指</button>
+  </div>
+  <div class="stats" style="margin-top:10px">
+    <div>采样率 <b id="sRate">–</b></div>
+    <div>电池 <b id="sBat">–</b></div>
+    <div>已记录 <b id="sDur">–</b></div>
+    <div>数据量 <b id="sBytes">–</b></div>
+    <div>丢失样本 <b id="sLost">–</b></div>
+    <div>断线重连 <b id="sReconn">–</b></div>
+  </div>
+</div>
+
+<div class="card">
+  <label for="inName">名称（会出现在导出的文件名里）</label>
+  <input id="inName" value="outdoor">
+  <label for="inNote">备注（佩戴位置、场景等）</label>
+  <input id="inNote" placeholder="例如：食指第二指节，出门散步">
+  <div class="row" style="margin-top:12px">
+    <button id="btnRec" disabled>开始记录</button>
+    <span class="muted">记录中请保持本页面在前台、屏幕常亮</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="muted" style="margin-bottom:8px">先按按钮，听到“嘀”后 3 秒内做一次对应手势</div>
+  <div class="row">
+    <button class="big right" id="btnRight" disabled>拇指往右滑<br><span style="font-size:13px;font-weight:400">眼镜左滑</span></button>
+    <button class="big left" id="btnLeft" disabled>拇指往左滑<br><span style="font-size:13px;font-weight:400">眼镜右滑</span></button>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="secondary" id="btnFalse" disabled>刚才误触发了</button>
+    <button class="secondary" id="btnUndo" disabled>撤销上一个标签</button>
+  </div>
+  <div id="countdown"></div>
+  <div class="muted">本次标签：<b id="sMarks">0</b></div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <b>已保存的记录</b>
+    <span class="muted" id="sQuota"></span>
+  </div>
+  <div id="sessions" class="muted">暂无</div>
+</div>
+
+<div class="card"><div class="log" id="log"></div></div>
+
+<script>
+"use strict";
+// 与 firmware/imu_stream 保持一致
+const UUID_SVC  = "526a1001-b5a3-f393-e0a9-e50e24dcca9e";
+const UUID_DATA = "526a1002-b5a3-f393-e0a9-e50e24dcca9e";
+const UUID_CMD  = "526a1003-b5a3-f393-e0a9-e50e24dcca9e";
+const CFG = { odr: 833, afs: 4, gfs: 500 };
+const LABEL_WINDOW_S = 3.0;
+const FLUSH_MS = 2000;
+
+const $ = id => document.getElementById(id);
+const logEl = $("log");
+function log(msg) {
+  const t = new Date().toLocaleTimeString();
+  logEl.textContent = `${t} ${msg}\n` + logEl.textContent.slice(0, 4000);
+}
+
+// ---------- IndexedDB ----------
+let db;
+function openDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("ringlog", 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      d.createObjectStore("sessions", { keyPath: "id" });
+      d.createObjectStore("chunks", { keyPath: ["sid", "seq"] });
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+function tx(store, mode, fn) {
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, mode);
+    const out = fn(t.objectStore(store));
+    t.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
+    t.onerror = () => rej(t.error);
+  });
+}
+const putSession = s => tx("sessions", "readwrite", st => st.put(s));
+const allSessions = () => tx("sessions", "readonly", st => st.getAll());
+function chunksOf(sid) {
+  return tx("chunks", "readonly", st => st.getAll(IDBKeyRange.bound([sid, 0], [sid, Infinity])));
+}
+function deleteSession(sid) {
+  return Promise.all([
+    tx("sessions", "readwrite", st => st.delete(sid)),
+    tx("chunks", "readwrite", st => st.delete(IDBKeyRange.bound([sid, 0], [sid, Infinity]))),
+  ]);
+}
+
+// ---------- 状态 ----------
+let device = null, dataChr = null, cmdChr = null;
+let connected = false;
+let session = null;          // 当前记录
+let pending = [];            // 尚未写入 IndexedDB 的数据包
+let pendingBytes = 0;
+let chunkSeq = 0;
+let nextIdx = null;
+let lastDevT = null;         // 最近一个样本的设备时间（秒，含回绕）
+let tWrap = 0, lastRawT = null;
+let rateCount = 0, rateT0 = performance.now(), rateVal = 0;
+let wakeLock = null;
+let flushTimer = null, infoTimer = null;
+let lastInfo = "";
+let countdownTimer = null;
+
+// ---------- 蓝牙 ----------
+async function connect() {
+  if (!navigator.bluetooth) {
+    alert("这个浏览器不支持网页蓝牙。安卓请用 Chrome；iPhone 请用 Bluefy 浏览器。");
+    return;
+  }
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: "RingIMU" }], optionalServices: [UUID_SVC] });
+  } catch (e) { log("未选择设备：" + e.message); return; }
+  device.addEventListener("gattserverdisconnected", onDisconnected);
+  await gattConnect();
+}
+
+async function gattConnect() {
+  $("connText").textContent = "连接中…";
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(UUID_SVC);
+  dataChr = await svc.getCharacteristic(UUID_DATA);
+  cmdChr = await svc.getCharacteristic(UUID_CMD);
+  cmdChr.addEventListener("characteristicvaluechanged", e => {
+    const s = new TextDecoder().decode(e.target.value).trim();
+    if (s.startsWith("# imu_stream")) {
+      lastInfo = s;
+      const m = s.match(/bat_v=([\d.]+)/);
+      if (m) $("sBat").textContent = m[1] + " V";
+    }
+  });
+  await cmdChr.startNotifications();
+  dataChr.addEventListener("characteristicvaluechanged", onData);
+  await dataChr.startNotifications();
+  for (const c of ["stop", `odr ${CFG.odr}`, `afs ${CFG.afs}`, `gfs ${CFG.gfs}`, "info"]) {
+    await sendCmd(c);
+    await sleep(80);
+  }
+  await sleep(300);
+  if (!lastInfo.includes("who_am_i=0x6A")) log("警告：IMU 未识别 " + lastInfo);
+  connected = true;
+  $("connDot").className = "dot on";
+  $("connText").textContent = "已连接 " + (device.name || "");
+  $("btnConnect").textContent = "重新选择";
+  $("btnRec").disabled = false;
+  log("已连接：" + lastInfo);
+  nextIdx = null;
+  await sendCmd("start");   // 连上就推流，方便看采样率；是否落盘由“开始记录”决定
+  if (session) { session.reconnects++; addMarker("reconnect", lastDevT, lastDevT); }
+  clearInterval(infoTimer);
+  infoTimer = setInterval(() => connected && sendCmd("info").catch(() => {}), 60000);
+}
+
+async function onDisconnected() {
+  connected = false;
+  $("connDot").className = session ? "dot rec" : "dot";
+  $("connText").textContent = "已断开，正在重连…";
+  log("蓝牙断开");
+  for (let i = 0; i < 1000 && !connected && device; i++) {
+    await sleep(2000);
+    try { await gattConnect(); return; } catch (e) { /* 继续重试 */ }
+  }
+}
+
+function sendCmd(s) { return cmdChr.writeValueWithResponse(new TextEncoder().encode(s)); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 数据包：idx:u32 t0:u32 n:u8 | n×(dt:u16, ax ay az gx gy gz: i16)
+function onData(e) {
+  const v = e.target.value;
+  const idx = v.getUint32(0, true);
+  let t = v.getUint32(4, true);
+  const n = v.getUint8(8);
+  if (nextIdx !== null) {
+    if (idx > nextIdx) { if (session) session.lost += idx - nextIdx; }
+  }
+  nextIdx = idx + n;
+  for (let k = 0; k < n; k++) t = (t + v.getUint16(9 + k * 14, true)) >>> 0;
+  if (lastRawT !== null && lastRawT - t > 2 ** 31) tWrap += 2 ** 32;
+  lastRawT = t;
+  lastDevT = (t + tWrap) / 1e6;
+  rateCount += n;
+
+  if (session) {
+    // 原样保存数据包（前面加 2 字节长度），导入时在电脑上解析
+    const buf = new Uint8Array(2 + v.byteLength);
+    buf[0] = v.byteLength & 0xff; buf[1] = v.byteLength >> 8;
+    buf.set(new Uint8Array(v.buffer, v.byteOffset, v.byteLength), 2);
+    pending.push(buf);
+    pendingBytes += buf.length;
+  }
+}
+
+// ---------- 记录 ----------
+async function startRec() {
+  const now = new Date();
+  session = {
+    id: now.getTime(),
+    name: ($("inName").value || "outdoor").replace(/[^\w一-龥-]/g, "_"),
+    note: $("inNote").value,
+    startedAt: now.toISOString(),
+    cfg: CFG, info: lastInfo, markers: [], bytes: 0, chunks: 0, lost: 0, reconnects: 0,
+    userAgent: navigator.userAgent,
+  };
+  chunkSeq = 0; pending = []; pendingBytes = 0;
+  await putSession(session);
+  flushTimer = setInterval(flush, FLUSH_MS);
+  await requestWakeLock();
+  $("btnRec").textContent = "停止记录";
+  $("connDot").className = "dot rec";
+  for (const b of ["btnRight", "btnLeft", "btnFalse", "btnUndo"]) $(b).disabled = false;
+  log("开始记录 " + session.name);
+}
+
+async function stopRec() {
+  clearInterval(flushTimer);
+  await flush();
+  session.endedAt = new Date().toISOString();
+  session.info_end = lastInfo;
+  await putSession(session);
+  log(`已保存：${fmtBytes(session.bytes)}，${session.markers.length} 个标签`);
+  session = null;
+  releaseWakeLock();
+  $("btnRec").textContent = "开始记录";
+  $("connDot").className = connected ? "dot on" : "dot";
+  for (const b of ["btnRight", "btnLeft", "btnFalse", "btnUndo"]) $(b).disabled = true;
+  renderSessions();
+}
+
+async function flush() {
+  if (!session || !pending.length) return;
+  const parts = pending; pending = [];
+  const out = new Uint8Array(pendingBytes); pendingBytes = 0;
+  let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
+  const s = session;
+  await tx("chunks", "readwrite", st => st.put({ sid: s.id, seq: chunkSeq++, data: out.buffer }));
+  s.bytes += out.length; s.chunks = chunkSeq;
+  await putSession(s);
+}
+
+function addMarker(label, t0, t1) {
+  if (!session || t0 === null) return;
+  session.markers.push({ label, t_start: t0, t_end: t1, phone_time: new Date().toISOString() });
+  $("sMarks").textContent = session.markers.filter(m => m.label !== "reconnect").length;
+  putSession(session);
+}
+
+// ---------- 标签 ----------
+let audioCtx;
+function beep(freq = 1200, ms = 120) {
+  try {
+    audioCtx = audioCtx || new AudioContext();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = freq; g.gain.value = 0.15;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + ms / 1000);
+  } catch (e) {}
+  if (navigator.vibrate) navigator.vibrate(ms);
+}
+
+function labelGesture(label, btn) {
+  if (lastDevT === null) return;
+  const t0 = lastDevT;
+  addMarker(label, t0, t0 + LABEL_WINDOW_S);
+  beep();
+  btn.classList.add("active");
+  let left = LABEL_WINDOW_S;
+  clearInterval(countdownTimer);
+  $("countdown").textContent = `现在做：${btn === $("btnRight") ? "拇指往右滑" : "拇指往左滑"}（${left.toFixed(0)}）`;
+  countdownTimer = setInterval(() => {
+    left -= 1;
+    if (left <= 0) {
+      clearInterval(countdownTimer);
+      $("countdown").textContent = "";
+      btn.classList.remove("active");
+      beep(600, 80);
+    } else {
+      $("countdown").textContent = `现在做：${btn === $("btnRight") ? "拇指往右滑" : "拇指往左滑"}（${left.toFixed(0)}）`;
+    }
+  }, 1000);
+}
+
+// ---------- 屏幕常亮 ----------
+async function requestWakeLock() {
+  try { wakeLock = await navigator.wakeLock.request("screen"); log("已开启屏幕常亮"); }
+  catch (e) { log("无法开启屏幕常亮：" + e.message); }
+}
+function releaseWakeLock() { if (wakeLock) { wakeLock.release(); wakeLock = null; } }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && session && !wakeLock) requestWakeLock();
+  if (document.visibilityState === "hidden" && session) log("页面进入后台：数据可能中断");
+});
+window.addEventListener("beforeunload", e => { if (session) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---------- 导出 ----------
+// 文件格式：b"RINGLOG1" | u32 头长度 | 头 JSON(UTF-8) | 若干 [u16 包长度 | 包]
+async function buildExport(sid) {
+  const s = (await allSessions()).find(x => x.id === sid);
+  const chunks = await chunksOf(sid);
+  const head = new TextEncoder().encode(JSON.stringify(s));
+  const pre = new Uint8Array(12);
+  pre.set(new TextEncoder().encode("RINGLOG1"), 0);
+  new DataView(pre.buffer).setUint32(8, head.length, true);
+  const blob = new Blob([pre, head, ...chunks.sort((a, b) => a.seq - b.seq).map(c => c.data)],
+                        { type: "application/octet-stream" });
+  return { s, blob };
+}
+
+async function exportSession(sid) {
+  const { s, blob } = await buildExport(sid);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${s.startedAt.slice(0, 19).replace(/[-:T]/g, "").replace(/^(\d{8})/, "$1_")}_${s.name}.ringlog`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+async function renderSessions() {
+  const list = (await allSessions()).sort((a, b) => b.id - a.id);
+  const el = $("sessions");
+  if (!list.length) { el.textContent = "暂无"; return; }
+  el.innerHTML = "";
+  for (const s of list) {
+    const div = document.createElement("div");
+    div.className = "sess";
+    const live = session && session.id === s.id;
+    const dur = s.endedAt ? ((new Date(s.endedAt) - new Date(s.startedAt)) / 60000).toFixed(1) + " 分钟" : "进行中";
+    const title = document.createElement("div");
+    title.textContent = `${s.name} · ${new Date(s.startedAt).toLocaleString()} · ${dur} · ${fmtBytes(s.bytes)} · ${s.markers.filter(m => m.label !== "reconnect").length} 个标签`;
+    div.appendChild(title);
+    const row = document.createElement("div");
+    row.className = "row"; row.style.marginTop = "6px";
+    const bE = document.createElement("button"); bE.className = "secondary"; bE.textContent = "导出";
+    bE.disabled = live; bE.onclick = () => exportSession(s.id);
+    const bD = document.createElement("button"); bD.className = "secondary"; bD.textContent = "删除";
+    bD.disabled = live;
+    bD.onclick = async () => { if (confirm("确定删除这条记录？导出前删除就找不回来了。")) { await deleteSession(s.id); renderSessions(); } };
+    row.append(bE, bD); div.appendChild(row);
+    el.appendChild(div);
+  }
+}
+
+function fmtBytes(b) { return b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : (b / 1e3).toFixed(0) + " KB"; }
+
+// ---------- 界面刷新 ----------
+setInterval(async () => {
+  const now = performance.now();
+  rateVal = rateCount / ((now - rateT0) / 1000); rateCount = 0; rateT0 = now;
+  $("sRate").textContent = connected ? rateVal.toFixed(0) + " Hz" : "–";
+  if (session) {
+    $("sDur").textContent = ((Date.now() - session.id) / 60000).toFixed(1) + " 分钟";
+    $("sBytes").textContent = fmtBytes(session.bytes + pendingBytes);
+    $("sLost").textContent = session.lost;
+    $("sReconn").textContent = session.reconnects;
+  }
+  if (navigator.storage && navigator.storage.estimate) {
+    const e = await navigator.storage.estimate();
+    $("sQuota").textContent = `已用 ${fmtBytes(e.usage)} / 可用 ${fmtBytes(e.quota)}`;
+  }
+}, 1000);
+
+$("btnConnect").onclick = connect;
+$("btnRec").onclick = () => (session ? stopRec() : startRec());
+$("btnRight").onclick = () => labelGesture("thumb_right", $("btnRight"));
+$("btnLeft").onclick = () => labelGesture("thumb_left", $("btnLeft"));
+$("btnFalse").onclick = () => { addMarker("false_trigger", lastDevT, lastDevT); beep(400, 60); };
+$("btnUndo").onclick = () => {
+  if (!session) return;
+  for (let i = session.markers.length - 1; i >= 0; i--) {
+    if (session.markers[i].label === "reconnect") continue;
+    const m = session.markers.splice(i, 1)[0];
+    log("已撤销 " + m.label);
+    putSession(session);
+    $("sMarks").textContent = session.markers.filter(x => x.label !== "reconnect").length;
+    break;
+  }
+};
+
+openDb().then(d => { db = d; renderSessions(); if (navigator.storage?.persist) navigator.storage.persist(); })
+        .catch(e => log("数据库打开失败：" + e));
+if (!navigator.bluetooth) log("此浏览器不支持网页蓝牙（安卓用 Chrome，iPhone 用 Bluefy）");
+</script>
+</body>
+</html>
